@@ -41,7 +41,7 @@ ifeq ($(HAZRUST),yes)
 .PHONY: jsoncdc.so
 jsoncdc.so:
 	cargo rustc $(FEATURES) --release -- $(LINK_FLAGS)
-	cp target/release/libjsoncdc.* $@
+	cp target/release/libjsoncdc.so $@
 
 .PHONY: cargoclean
 cargoclean:
@@ -76,5 +76,5 @@ all: jsoncdc.so
 
 .PHONY: test
 test:
-	pgxn check ./
+	pgxn check -U postgres ./
 	util/checkstyle

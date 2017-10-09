@@ -13,13 +13,11 @@ extern crate rpgffi as pg;
 #[cfg(feature = "pg-ldc-messages")]
 extern crate serde_json;
 
-
 macro_rules! log {
     ($msg:expr) => {
         elog(file!(), line!(), "log()", $msg)
     }
 }
-
 
 // Implementation of initialization and callbacks.
 
@@ -63,8 +61,8 @@ unsafe extern "C" fn change(
     change: *mut pg::ReorderBufferChange,
 ) {
     let relid = (*relation).rd_id;
-    let last_relid: *mut pg::Oid = (*ctx).output_plugin_private as
-        *mut pg::Oid;
+    let last_relid: *mut pg::Oid =
+        (*ctx).output_plugin_private as *mut pg::Oid;
     if *last_relid != relid {
         pg::OutputPluginPrepareWrite(ctx, CFALSE);
         append_schema(relation, (*ctx).out);
@@ -81,13 +79,31 @@ unsafe extern "C" fn commit(
     txn: *mut pg::ReorderBufferTXN,
     _lsn: pg::XLogRecPtr,
 ) {
-    let s = CString::new("{ \"commit\": %u, \"t\": \"%s\" }").unwrap();
+    let j = r#"{ "commit": %u, "epoch": %u, "t": "%s", "c_txid": %u, "xmin": %u, "c_xmin": %u }"#;
+    let s = CString::new(j).expect("Failed to allocate CString");
     let t = pg::timestamptz_to_str((*txn).commit_time);
+    let slot = (*ctx).slot;
+    let xmin = (*slot).effective_xmin;
+    let c_xmin = (*slot).effective_catalog_xmin;
+    let mut epoch: pg::uint32 = 0;
+    let epoch_ptr: *mut pg::uint32 = &mut epoch;
+    let mut nt: pg::TransactionId = 0;
+    let nt_ptr: *mut pg::TransactionId = &mut nt;
+    pg::GetNextXidAndEpoch(nt_ptr, epoch_ptr);
     pg::OutputPluginPrepareWrite(ctx, CTRUE);
-    pg::appendStringInfo((*ctx).out, s.as_ptr(), (*txn).xid, t);
+    pg::appendStringInfo(
+        (*ctx).out,
+        s.as_ptr(),
+        nt,
+        epoch,
+        t,
+        (*txn).xid,
+        xmin,
+        c_xmin,
+    );
     pg::OutputPluginWrite(ctx, CTRUE);
-    let last_relid: *mut pg::Oid = (*ctx).output_plugin_private as
-        *mut pg::Oid;
+    let last_relid: *mut pg::Oid =
+        (*ctx).output_plugin_private as *mut pg::Oid;
     *last_relid = 0;
 }
 
@@ -125,15 +141,21 @@ impl<'a> PGAppend<&'a str> for pg::StringInfo {
 }
 
 impl PGAppend<*mut i8> for pg::StringInfo {
-    unsafe fn add_str(self, t: *mut i8) { self.add_str(t as *const i8); }
-    unsafe fn add_json(self, t: *mut i8) { self.add_json(t as *const i8); }
+    unsafe fn add_str(self, t: *mut i8) {
+        self.add_str(t as *const i8);
+    }
+    unsafe fn add_json(self, t: *mut i8) {
+        self.add_json(t as *const i8);
+    }
 }
 
 impl PGAppend<*const i8> for pg::StringInfo {
     unsafe fn add_str(self, t: *const i8) {
         pg::appendStringInfoString(self, t);
     }
-    unsafe fn add_json(self, t: *const i8) { pg::escape_json(self, t); }
+    unsafe fn add_json(self, t: *const i8) {
+        pg::escape_json(self, t);
+    }
 }
 
 #[cfg(feature = "pg-ldc-messages")]
@@ -155,8 +177,9 @@ impl PGAppend<OutputBytesInMostFriendlyWay> for pg::StringInfo {
         if !bytes.contains(&0) {
             if let Ok(ref s) = String::from_utf8(bytes.to_vec()) {
                 if s.trim_left().starts_with("{") {
-                    let parsed: serde_json::Result<serde_json::Value> =
-                        serde_json::from_str(s);
+                    let parsed: serde_json::Result<
+                        serde_json::Value,
+                    > = serde_json::from_str(s);
                     if let Ok(ref json) = parsed {
                         self.add_str(json.to_string().deref());
                         return;
@@ -177,7 +200,6 @@ impl PGAppend<OutputBytesInMostFriendlyWay> for pg::StringInfo {
     }
 }
 
-
 struct BufferChangeWrapper(pg::Enum_ReorderBufferChangeType);
 
 impl fmt::Display for BufferChangeWrapper {
@@ -194,7 +216,7 @@ impl fmt::Display for BufferChangeWrapper {
             #[cfg_attr(rustfmt, rustfmt_skip)]
             REORDER_BUFFER_CHANGE_INTERNAL_SPEC_INSERT =>
                 "internal_spec_insert",
-            _ => "unknown_change_type",   // NB: Unreachable after Postgres 9.4
+            _ => "unknown_change_type", // NB: Unreachable after Postgres 9.4
         };
         write!(f, "{}", formatted_token)
     }
@@ -225,8 +247,7 @@ unsafe fn append_change(
             format!(
                 "Unrecognized Change Action: [ {} ]",
                 BufferChangeWrapper((*change).action)
-            )
-            .as_str()
+            ).as_str()
         );
         return;
     }
@@ -244,7 +265,6 @@ unsafe fn append_change(
     out.add_json(qualified_name);
     out.add_str(" }");
 }
-
 
 unsafe fn append_tuple_buf_as_json(
     data: *mut pg::ReorderBufferTupleBuf,
@@ -441,7 +461,6 @@ unsafe fn is_stale_toast(
     return false;
 }
 
-
 // Symbols Postgres needs to find.
 
 #[allow(non_snake_case)]
@@ -455,7 +474,6 @@ pub unsafe extern "C" fn _PG_output_plugin_init(
 ) {
     init(cb);
 }
-
 
 // Miscellaneous.
 
